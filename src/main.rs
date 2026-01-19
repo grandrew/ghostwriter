@@ -416,6 +416,9 @@ fn ghostwriter(args: &Args) -> Result<()> {
         lock!(keyboard).progress("thinking...")?;
         if engine.execute().is_err() {
             lock!(keyboard).progress(" model error. ")?;
+            // Show the error briefly, then erase progress text so it doesn't remain in the document.
+            sleep(Duration::from_millis(800));
+            lock!(keyboard).progress_end()?;
         }
 
         if config.no_loop {

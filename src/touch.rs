@@ -4,7 +4,7 @@ use evdev::{Device, InputEvent};
 use log::{debug, info, trace};
 
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::device::DeviceModel;
 
@@ -75,7 +75,22 @@ impl Touch {
     pub fn wait_for_trigger(&mut self) -> Result<()> {
         let mut position_x = 0;
         let mut position_y = 0;
+
+        // Require multiple taps in the trigger zone to avoid accidental activation.
+        const REQUIRED_TAPS: u8 = 3;
+        const MAX_INTERVAL_BETWEEN_TAPS: Duration = Duration::from_millis(300);
+
+        let mut tap_count: u8 = 0;
+        let mut last_tap_at: Option<Instant> = None;
         loop {
+            // Reset if too much time has passed since the last qualifying tap.
+            if let Some(last) = last_tap_at {
+                if last.elapsed() > MAX_INTERVAL_BETWEEN_TAPS {
+                    tap_count = 0;
+                    last_tap_at = None;
+                }
+            }
+
             // Store events in a temporary vector to avoid borrowing issues
             let mut events_to_process = Vec::new();
             if let Some(device) = &mut self.device {
@@ -96,8 +111,28 @@ impl Touch {
                     let (x, y) = self.input_to_virtual((position_x, position_y));
                     debug!("Touch release detected at ({}, {}) normalized ({}, {})", position_x, position_y, x, y);
                     if self.is_in_trigger_zone(x, y) {
-                        debug!("Touch release in target zone!");
-                        return Ok(());
+                        let now = Instant::now();
+                        if let Some(last) = last_tap_at {
+                            if now.duration_since(last) <= MAX_INTERVAL_BETWEEN_TAPS {
+                                tap_count = tap_count.saturating_add(1);
+                            } else {
+                                tap_count = 1;
+                            }
+                        } else {
+                            tap_count = 1;
+                        }
+                        last_tap_at = Some(now);
+                        debug!("Touch release in target zone (tap {}/{})", tap_count, REQUIRED_TAPS);
+
+                        if tap_count >= REQUIRED_TAPS {
+                            debug!("Trigger detected (triple-tap)");
+                            return Ok(());
+                        }
+                    }
+                    // Any release outside the trigger zone breaks the sequence.
+                    else {
+                        tap_count = 0;
+                        last_tap_at = None;
                     }
                 }
             }
